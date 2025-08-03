@@ -31,10 +31,19 @@ class ChatClient {
     }
     
     connect() {
+        if (this.isConnected || (this.ws && this.ws.readyState === WebSocket.CONNECTING)) {
+            console.log('Уже подключены или подключаемся');
+            return;
+        }
+            // Закрываем старое соединение, если есть
+        if (this.ws) {
+            this.ws.close();
+        }
+    
         this.username = this.usernameInput.value.trim() || 'Аноним';
         this.room = this.roomInput.value.trim() || 'general';
         
-        const wsUrl = `ws://localhost:8080/ws?username=${encodeURIComponent(this.username)}&room=${encodeURIComponent(this.room)}`;
+        const wsUrl = `ws://192.168.0.101:8080/ws?username=${encodeURIComponent(this.username)}&room=${encodeURIComponent(this.room)}`;
         
         try {
             this.ws = new WebSocket(wsUrl);
@@ -44,8 +53,10 @@ class ChatClient {
             };
             
             this.ws.onmessage = (event) => {
-                const message = JSON.parse(event.data);
-                this.displayMessage(message);
+                 console.log('Получено RAW сообщение:', event.data); // ДОБАВЬ ЭТО
+                 const data = JSON.parse(event.data);
+                 console.log('Распарсенное сообщение:', data); // И ЭТО
+                 this.handleMessage(data);
             };
             
             this.ws.onclose = () => {
@@ -78,6 +89,7 @@ class ChatClient {
     
     onDisconnected() {
         this.isConnected = false;
+        this.ws = null;
         this.messageInput.disabled = true;
         this.sendBtn.disabled = true;
         this.statusElement.textContent = 'Отключен';
@@ -90,10 +102,12 @@ class ChatClient {
         if (!this.isConnected || !this.messageInput.value.trim()) return;
         
         const message = {
+            type: 'chat',
             content: this.messageInput.value.trim(),
             timestamp: new Date().toISOString()
         };
         
+        console.log('Отправляем сообщение:', message);
         this.ws.send(JSON.stringify(message));
         this.messageInput.value = '';
     }

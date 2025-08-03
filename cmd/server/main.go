@@ -24,9 +24,9 @@ func main() {
     http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static/"))))
     
     // Запускаем HTTP сервер
-    log.Println("Сервер запущен на http://localhost:8080")
+    log.Println("Сервер запущен на http://191.168.0.101:8080")
     
-    err := http.ListenAndServe(":8080", nil)
+    err := http.ListenAndServe("0.0.0.0:8080", nil)
     if err != nil {
         log.Fatal("Ошибка запуска сервера: ", err)
     }

@@ -3,12 +3,20 @@ package models
 import "time"
 
 type Message struct {
+    Type      string    `json:"type"`
     ID        int       `json:"id"`
     Username  string    `json:"username"`
     Content   string    `json:"content"`
     Timestamp time.Time `json:"timestamp"`
     RoomID    string    `json:"room_id"`
 }
+
+const (
+    MessageTypeChat         = "chat"
+    MessageTypeUserJoined   = "user_joined"
+    MessageTypeUserLeft     = "user_left"
+    MessageTypeUsersList    = "users_list"
+)
 
 type User struct {
     Username string `json:"username"`

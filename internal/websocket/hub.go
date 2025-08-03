@@ -1,20 +1,13 @@
 package websocket
 
 import (
+    "encoding/json"
     "log"
-    "net/http"
     "time"
     
     "github.com/gorilla/websocket"
     "Thoth/internal/models"
 )
-
-// Upgrader превращает обычный HTTP запрос в WebSocket соединение
-var upgrader = websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        return true // Разрешаем подключения с любых доменов (для разработки)
-    },
-}
 
 // Client представляет одного подключенного пользователя
 type Client struct {
@@ -47,39 +40,80 @@ func NewHub() *Hub {
 }
 
 func (h *Hub) Run() {
+    log.Println("Hub запущен и ожидает события")
     for {
         select {
         case client := <-h.Register:
-            // Новый клиент подключился
+            log.Printf("Hub: Получен запрос на регистрацию клиента %s", client.Username)
+            
             if h.Clients[client.RoomID] == nil {
                 h.Clients[client.RoomID] = make(map[*Client]bool)
+                log.Printf("Hub: Создана новая комната %s", client.RoomID)
             }
             h.Clients[client.RoomID][client] = true
-            log.Printf("Клиент %s подключился к комнате %s", client.Username, client.RoomID)
+            
+            clientCount := len(h.Clients[client.RoomID])
+            log.Printf("Клиент %s подключился к комнате %s. Всего клиентов в комнате: %d", 
+                client.Username, client.RoomID, clientCount)
+
+            // АСИНХРОННО уведомляем всех о новом пользователе
+            joinMessage := models.Message{
+                Type:      models.MessageTypeUserJoined,
+                Username:  client.Username,
+                Content:   client.Username + " присоединился к чату",
+                Timestamp: time.Now(),
+                RoomID:    client.RoomID,
+            }
+            log.Printf("Hub: Отправляем joinMessage асинхронно")
+            h.SendMessageAsync(joinMessage) // ИСПОЛЬЗУЕМ АСИНХРОННЫЙ МЕТОД
+
+            // АСИНХРОННО отправляем список пользователей
+            log.Printf("Hub: Отправляем список пользователей асинхронно")
+            h.BroadcastUsersList(client.RoomID) // Уже асинхронный
 
         case client := <-h.Unregister:
-            // Клиент отключился
+            log.Printf("Hub: Получен запрос на отключение клиента %s", client.Username)
+            
             if clients, ok := h.Clients[client.RoomID]; ok {
                 if _, ok := clients[client]; ok {
                     delete(h.Clients[client.RoomID], client)
                     close(client.Send)
                     log.Printf("Клиент %s отключился от комнаты %s", client.Username, client.RoomID)
+
+                    leaveMessage := models.Message{
+                        Type:      models.MessageTypeUserLeft,
+                        Username:  client.Username,
+                        Content:   client.Username + " покинул чат",
+                        Timestamp: time.Now(),
+                        RoomID:    client.RoomID,
+                    }
+                    h.SendMessageAsync(leaveMessage) // АСИНХРОННО
+                    h.BroadcastUsersList(client.RoomID) // Уже асинхронный
                 }
             }
 
         case message := <-h.Broadcast:
-            // Пришло сообщение для рассылки
+            log.Printf("Hub: Получено сообщение для рассылки: тип='%s', от='%s', комната='%s'", 
+                message.Type, message.Username, message.RoomID)
+                
             if clients, ok := h.Clients[message.RoomID]; ok {
+                log.Printf("Hub: Найдено %d клиентов в комнате %s", len(clients), message.RoomID)
+                sentCount := 0
                 for client := range clients {
+                    log.Printf("Hub: Пытаемся отправить сообщение клиенту %s", client.Username)
                     select {
                     case client.Send <- message:
-                        // Сообщение успешно отправлено в очередь клиента
+                        sentCount++
+                        log.Printf("Hub: Сообщение успешно отправлено клиенту %s", client.Username)
                     default:
-                        // Очередь клиента переполнена, отключаем его
+                        log.Printf("Hub: Очередь клиента %s переполнена, отключаем", client.Username)
                         close(client.Send)
                         delete(h.Clients[message.RoomID], client)
                     }
                 }
+                log.Printf("Hub: Сообщение отправлено %d клиентам", sentCount)
+            } else {
+                log.Printf("Hub: ОШИБКА - Комната %s не найдена в h.Clients!", message.RoomID)
             }
         }
     }
@@ -119,6 +153,14 @@ func (c *Client) ReadPump() {
         msg.RoomID = c.RoomID
         msg.Timestamp = time.Now()
 
+        // Если тип не указан, считаем что это чат
+        if msg.Type == "" {
+            msg.Type = models.MessageTypeChat
+        }
+
+        log.Printf("Получено сообщение от %s: тип=%s, содержимое=%s", 
+            c.Username, msg.Type, msg.Content)
+
         // Отправляем в Hub для рассылки всем
         c.Hub.Broadcast <- msg
     }
@@ -131,6 +173,8 @@ func (c *Client) WritePump() {
         ticker.Stop()
         c.Conn.Close()
     }()
+
+    log.Printf("WritePump запущен для клиента %s", c.Username)
 
     for {
         select {
@@ -157,4 +201,47 @@ func (c *Client) WritePump() {
             }
         }
     }
+}
+
+func (h *Hub) GetRoomUsers(roomID string) []string {
+    var users []string
+    if clients, ok := h.Clients[roomID]; ok {
+        for client := range clients {
+            users = append(users, client.Username)
+        }
+    }
+    return users
+}
+
+// Отправляет список пользователей всем в комнате
+func (h *Hub) BroadcastUsersList(roomID string) {
+    users := h.GetRoomUsers(roomID)
+    
+    // Преобразуем список пользователей в JSON строку
+    usersJSON, err := json.Marshal(users)
+    if err != nil {
+        log.Printf("Ошибка сериализации списка пользователей: %v", err)
+        return
+    }
+    
+    // Создаем сообщение с типом users_list
+    usersMessage := models.Message{
+        Type:      models.MessageTypeUsersList,
+        Content:   string(usersJSON), // JSON строка со списком пользователей
+        RoomID:    roomID,
+        Timestamp: time.Now(),
+        Username:  "system",
+    }
+    
+    // АСИНХРОННАЯ отправка в отдельной горутине
+    go func() {
+        h.Broadcast <- usersMessage
+    }()
+}
+
+// Метод для асинхронной отправки сообщений
+func (h *Hub) SendMessageAsync(message models.Message) {
+    go func() {
+        h.Broadcast <- message
+    }()
 }
