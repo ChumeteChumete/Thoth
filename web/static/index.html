@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat App</title>
+    <link rel="stylesheet" href="/static/style.css">  <!-- Добавили /static/ -->
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Чат</h1>
+            <div class="user-info">
+                <span id="username-display"></span> в комнате <span id="room-display"></span>
+                <span id="status" class="status disconnected">Отключен</span>
+            </div>
+        </div>
+        
+        <div class="chat-container">
+            <div id="messages" class="messages"></div>
+            
+            <div class="input-container">
+                <input type="text" id="messageInput" placeholder="Напишите сообщение..." 
+                       autocomplete="off" disabled>
+                <button id="sendBtn" disabled>Отправить</button>
+            </div>
+        </div>
+        
+        <div class="connection-form" id="connectionForm">
+            <h3>Подключиться к чату</h3>
+            <input type="text" id="usernameInput" placeholder="Ваше имя" value="Пользователь">
+            <input type="text" id="roomInput" placeholder="Комната" value="general">
+            <button id="connectBtn">Подключиться</button>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>  <!-- Добавили /static/ -->
+</body>
+</html>
