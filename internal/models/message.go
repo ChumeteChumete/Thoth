@@ -9,6 +9,8 @@ type Message struct {
     Content   string    `json:"content"`
     Timestamp time.Time `json:"timestamp"`
     RoomID    string    `json:"room_id"`
+    TargetUser string      `json:"target_user,omitempty"`
+    WebRTCData interface{} `json:"webrtc_data,omitempty"`
 }
 
 const (
@@ -16,6 +18,9 @@ const (
     MessageTypeUserJoined   = "user_joined"
     MessageTypeUserLeft     = "user_left"
     MessageTypeUsersList    = "users_list"
+    MessageTypeWebRTCOffer     = "webrtc_offer"
+    MessageTypeWebRTCAnswer    = "webrtc_answer"
+    MessageTypeWebRTCCandidate = "webrtc_candidate"
 )
 
 type User struct {

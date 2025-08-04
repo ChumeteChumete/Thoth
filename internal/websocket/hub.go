@@ -4,6 +4,7 @@ import (
     "encoding/json"
     "log"
     "time"
+    "context"
     
     "github.com/gorilla/websocket"
     "Thoth/internal/models"
@@ -27,15 +28,22 @@ type Hub struct {
     Broadcast  chan models.Message  // Канал для рассылки сообщений
     Register   chan *Client         // Канал для регистрации новых клиентов  
     Unregister chan *Client         // Канал для отключения клиентов
+
+    ctx    context.Context
+    cancel context.CancelFunc
 }
 
 // NewHub создает новый Hub
 func NewHub() *Hub {
+    ctx, cancel := context.WithCancel(context.Background())
+    
     return &Hub{
         Clients:    make(map[string]map[*Client]bool),
         Broadcast:  make(chan models.Message),
         Register:   make(chan *Client),
         Unregister: make(chan *Client),
+        ctx:        ctx,
+        cancel:     cancel,
     }
 }
 
@@ -43,6 +51,11 @@ func (h *Hub) Run() {
     log.Println("Hub запущен и ожидает события")
     for {
         select {
+        case <-h.ctx.Done():
+            log.Println("Hub: Получен сигнал завершения, выходим из Run()")
+            h.shutdown()
+            return
+
         case client := <-h.Register:
             log.Printf("Hub: Получен запрос на регистрацию клиента %s", client.Username)
             
@@ -244,4 +257,19 @@ func (h *Hub) SendMessageAsync(message models.Message) {
     go func() {
         h.Broadcast <- message
     }()
+}
+
+func (h *Hub) Stop() {
+    log.Println("Hub: Завершение работы через context")
+    h.cancel()
+}
+
+func (h *Hub) shutdown() {
+    log.Println("Hub: Завершаем соединения...")
+    for _, clients := range h.Clients {
+        for client := range clients {
+            close(client.Send)
+            client.Conn.Close()
+        }
+    }
 }

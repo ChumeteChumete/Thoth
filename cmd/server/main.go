@@ -1,6 +1,10 @@
 package main
 
 import (
+    "context"
+    "os/signal"
+    "syscall"
+    "time"
     "log"
     "net/http"
 
@@ -24,12 +28,30 @@ func main() {
     http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("web/static/"))))
     
     // Запускаем HTTP сервер
-    log.Println("Сервер запущен на http://191.168.0.101:8080")
-    
-    err := http.ListenAndServe("0.0.0.0:8080", nil)
-    if err != nil {
-        log.Fatal("Ошибка запуска сервера: ", err)
+    srv := &http.Server{Addr: ":8080"}
+
+    go func() {
+        log.Println("Сервер запущен")
+        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+            log.Fatalf("Ошибка запуска сервера: %v", err)
+        }
+    }()
+
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+
+    <-ctx.Done()
+    log.Println("Получен сигнал завершения")
+
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    if err := srv.Shutdown(shutdownCtx); err != nil {
+        log.Fatalf("Ошибка при завершении сервера: %v", err)
     }
+
+    hub.Stop()
+    log.Println("Сервер остановлен")
 }
 
 // serveHome отдает главную страницу
