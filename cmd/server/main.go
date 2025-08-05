@@ -7,12 +7,29 @@ import (
     "time"
     "log"
     "net/http"
+    "os"
+    "github.com/joho/godotenv"
 
     "Thoth/internal/handlers"
     "Thoth/internal/websocket"
+    "Thoth/internal/storage"
 )
 
 func main() {
+    // Загружаем переменные окружения из .env
+    if err := godotenv.Load(); err != nil {
+        log.Println("Файл .env не найден, переменные окружения будут взяты из системы")
+    }
+
+    connStr := os.Getenv("THOTH_DB_CONN")
+    if connStr == "" {
+        log.Fatal("Не задана переменная окружения THOTH_DB_CONN")
+    }
+    store, err := storage.NewStorage(connStr)
+    if err != nil {
+        log.Fatalf("Ошибка подключения к базе: %v", err)
+    }
+    defer store.Close()
     // Создаем Hub - центральный диспетчер чата
     hub := websocket.NewHub()
     
@@ -20,7 +37,7 @@ func main() {
     go hub.Run()
     
     // Создаем обработчики HTTP запросов
-    chatHandler := handlers.NewChatHandler(hub)
+    chatHandler := handlers.NewChatHandler(hub, store)
     
     // Настраиваем маршруты
     http.HandleFunc("/", serveHome)                    // Главная страница

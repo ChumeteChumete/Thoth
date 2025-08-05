@@ -8,6 +8,7 @@ import (
     
     "github.com/gorilla/websocket"
     "Thoth/internal/models"
+    "Thoth/internal/storage"
 )
 
 // Client представляет одного подключенного пользователя
@@ -17,6 +18,7 @@ type Client struct {
     Send     chan models.Message    // Канал для отправки сообщений этому клиенту
     Username string                 // Имя пользователя
     RoomID   string                 // В какой комнате находится
+    Store    *storage.Storage          // Отправка сообщений в БД
 }
 
 // Hub управляет всеми клиентами и сообщениями
@@ -39,7 +41,7 @@ func NewHub() *Hub {
     
     return &Hub{
         Clients:    make(map[string]map[*Client]bool),
-        Broadcast:  make(chan models.Message),
+        Broadcast:  make(chan models.Message, 1000), // БУФЕР
         Register:   make(chan *Client),
         Unregister: make(chan *Client),
         ctx:        ctx,
@@ -78,11 +80,11 @@ func (h *Hub) Run() {
                 RoomID:    client.RoomID,
             }
             log.Printf("Hub: Отправляем joinMessage асинхронно")
-            h.SendMessageAsync(joinMessage) // ИСПОЛЬЗУЕМ АСИНХРОННЫЙ МЕТОД
+            h.SendMessageAsync(joinMessage)
 
             // АСИНХРОННО отправляем список пользователей
             log.Printf("Hub: Отправляем список пользователей асинхронно")
-            h.BroadcastUsersList(client.RoomID) // Уже асинхронный
+            h.BroadcastUsersList(client.RoomID)
 
         case client := <-h.Unregister:
             log.Printf("Hub: Получен запрос на отключение клиента %s", client.Username)
@@ -100,8 +102,8 @@ func (h *Hub) Run() {
                         Timestamp: time.Now(),
                         RoomID:    client.RoomID,
                     }
-                    h.SendMessageAsync(leaveMessage) // АСИНХРОННО
-                    h.BroadcastUsersList(client.RoomID) // Уже асинхронный
+                    h.SendMessageAsync(leaveMessage)
+                    h.BroadcastUsersList(client.RoomID)
                 }
             }
 
@@ -109,6 +111,7 @@ func (h *Hub) Run() {
             log.Printf("Hub: Получено сообщение для рассылки: тип='%s', от='%s', комната='%s'", 
                 message.Type, message.Username, message.RoomID)
                 
+<<<<<<< HEAD
             if clients, ok := h.Clients[message.RoomID]; ok {
                 log.Printf("Hub: Найдено %d клиентов в комнате %s", len(clients), message.RoomID)
                 sentCount := 0
@@ -123,6 +126,36 @@ func (h *Hub) Run() {
                         close(client.Send)
                         delete(h.Clients[message.RoomID], client)
                     }
+=======
+            // WebRTC сообщение?
+            if message.Type == models.MessageTypeWebRTCOffer || 
+               message.Type == models.MessageTypeWebRTCAnswer || 
+               message.Type == models.MessageTypeWebRTCCandidate {
+                
+                // WebRTC сообщения идут конкретному пользователю
+                log.Printf("Hub: WebRTC сообщение '%s' для пользователя %s", message.Type, message.TargetUser)
+                h.SendToUser(message)
+            } else {
+                // Обычные сообщения - всем в комнате
+                if clients, ok := h.Clients[message.RoomID]; ok {
+                        log.Printf("Hub: Найдено %d клиентов в комнате %s", len(clients), message.RoomID)
+                        sentCount := 0
+                        for client := range clients {
+                            log.Printf("Hub: Пытаемся отправить сообщение клиенту %s", client.Username)
+                            select {
+                            case client.Send <- message:
+                                sentCount++
+                                log.Printf("Hub: Сообщение успешно отправлено клиенту %s", client.Username)
+                            default:
+                                log.Printf("Hub: Очередь клиента %s переполнена, отключаем", client.Username)
+                                close(client.Send)
+                                delete(h.Clients[message.RoomID], client)
+                            }
+                        }
+                        log.Printf("Hub: Сообщение отправлено %d клиентам", sentCount)
+                } else {
+                    log.Printf("Hub: ОШИБКА - Комната %s не найдена в h.Clients!", message.RoomID)
+>>>>>>> b7106ae (added postgreSQL, updated UI)
                 }
                 log.Printf("Hub: Сообщение отправлено %d клиентам", sentCount)
             } else {
@@ -135,13 +168,14 @@ func (h *Hub) Run() {
 // ReadPump читает сообщения от браузера и отправляет в Hub
 func (c *Client) ReadPump() {
     defer func() {
+        log.Printf("ReadPump: Завершение для клиента %s", c.Username)
         c.Hub.Unregister <- c  // При выходе - отключаемся от Hub
         c.Conn.Close()         // Закрываем WebSocket соединение
     }()
 
     // Настройки соединения
-    c.Conn.SetReadLimit(512)                    // Макс размер сообщения
-    c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Таймаут чтения
+    c.Conn.SetReadLimit(32768)  // 32Kb
+    c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
     
     // Обработчик pong (для keep-alive)
     c.Conn.SetPongHandler(func(string) error {
@@ -156,7 +190,9 @@ func (c *Client) ReadPump() {
         err := c.Conn.ReadJSON(&msg)
         if err != nil {
             if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-                log.Printf("WebSocket error: %v", err)
+                log.Printf("WebSocket error для %s: %v", c.Username, err)
+            } else {
+                log.Printf("ReadPump: Нормальное закрытие соединения для %s: %v", c.Username, err)
             }
             break
         }
@@ -166,16 +202,39 @@ func (c *Client) ReadPump() {
         msg.RoomID = c.RoomID
         msg.Timestamp = time.Now()
 
-        // Если тип не указан, считаем что это чат
+        if msg.Type == models.MessageTypeChat && c.Store != nil {
+            err := c.Store.SaveMessage(storage.Message{
+                Username: msg.Username,
+                Content:  msg.Content,
+            })
+            if err != nil {
+                log.Printf("Ошибка сохранения сообщения в БД: %v", err)
+            }
+        }
+
+        // Если без типа - обычный чат
         if msg.Type == "" {
             msg.Type = models.MessageTypeChat
         }
 
-        log.Printf("Получено сообщение от %s: тип=%s, содержимое=%s", 
-            c.Username, msg.Type, msg.Content)
+        // ЛОГИРУЕМ WEBRTC СООБЩЕНИЯ ОТДЕЛЬНО
+        if msg.Type == models.MessageTypeWebRTCOffer || 
+           msg.Type == models.MessageTypeWebRTCAnswer || 
+           msg.Type == models.MessageTypeWebRTCCandidate {
+            log.Printf("WebRTC сообщение от %s: тип=%s, цель=%s", 
+                c.Username, msg.Type, msg.TargetUser)
+        } else {
+            log.Printf("Получено сообщение от %s: тип=%s, содержимое=%s", 
+                c.Username, msg.Type, msg.Content)
+        }
 
-        // Отправляем в Hub для рассылки всем
-        c.Hub.Broadcast <- msg
+        // Отправляем в Hub для рассылки
+        select {
+        case c.Hub.Broadcast <- msg:
+            // Сообщение отправлено в Hub
+        default:
+            log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Hub.Broadcast переполнен! Сообщение от %s потеряно", c.Username)
+        }
     }
 }
 
@@ -185,6 +244,7 @@ func (c *Client) WritePump() {
     defer func() {
         ticker.Stop()
         c.Conn.Close()
+        log.Printf("WritePump: Завершение для клиента %s", c.Username)
     }()
 
     log.Printf("WritePump запущен для клиента %s", c.Username)
@@ -196,13 +256,22 @@ func (c *Client) WritePump() {
             
             if !ok {
                 // Hub закрыл канал - отправляем close message
+                log.Printf("WritePump: Канал Send закрыт для %s", c.Username)
                 c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
                 return
             }
 
+            // ЛОГИРУЕМ WEBRTC ОТПРАВКУ
+            if message.Type == models.MessageTypeWebRTCOffer || 
+               message.Type == models.MessageTypeWebRTCAnswer || 
+               message.Type == models.MessageTypeWebRTCCandidate {
+                log.Printf("WritePump: Отправляем WebRTC сообщение %s клиенту %s", 
+                    message.Type, c.Username)
+            }
+
             // Отправляем JSON сообщение в браузер
             if err := c.Conn.WriteJSON(message); err != nil {
-                log.Printf("Ошибка отправки сообщения: %v", err)
+                log.Printf("WritePump: Ошибка отправки сообщения клиенту %s: %v", c.Username, err)
                 return
             }
 
@@ -210,12 +279,45 @@ func (c *Client) WritePump() {
             // Отправляем ping для поддержания соединения
             c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
             if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+                log.Printf("WritePump: Ошибка ping для %s: %v", c.Username, err)
                 return
             }
         }
     }
 }
 
+<<<<<<< HEAD
+=======
+func (h *Hub) FindClient(roomID, username string) *Client {
+    if clients, exists := h.Clients[roomID]; exists {
+        for client := range clients {
+            if client.Username == username {
+                return client
+            }
+        }
+    }
+    return nil
+}
+
+// Отправить сообщение конкретному пользователю - С УЛУЧШЕННОЙ ОБРАБОТКОЙ ОШИБОК
+func (h *Hub) SendToUser(message models.Message) {
+    targetClient := h.FindClient(message.RoomID, message.TargetUser)
+    if targetClient == nil {
+        log.Printf("Hub: Пользователь %s не найден в комнате %s", message.TargetUser, message.RoomID)
+        return
+    }
+    
+    select {
+    case targetClient.Send <- message:
+        log.Printf("Hub: WebRTC сообщение %s отправлено пользователю %s", message.Type, message.TargetUser)
+    default:
+        log.Printf("Hub: Очередь пользователя %s переполнена, отключаем", message.TargetUser)
+        close(targetClient.Send)
+        delete(h.Clients[message.RoomID], targetClient)
+    }
+}
+
+>>>>>>> b7106ae (added postgreSQL, updated UI)
 func (h *Hub) GetRoomUsers(roomID string) []string {
     var users []string
     if clients, ok := h.Clients[roomID]; ok {
@@ -248,14 +350,24 @@ func (h *Hub) BroadcastUsersList(roomID string) {
     
     // АСИНХРОННАЯ отправка в отдельной горутине
     go func() {
-        h.Broadcast <- usersMessage
+        select {
+        case h.Broadcast <- usersMessage:
+            // Отправлено
+        default:
+            log.Printf("Hub: Не удалось отправить users_list - Broadcast переполнен")
+        }
     }()
 }
 
 // Метод для асинхронной отправки сообщений
 func (h *Hub) SendMessageAsync(message models.Message) {
     go func() {
-        h.Broadcast <- message
+        select {
+        case h.Broadcast <- message:
+            // Отправлено
+        default:
+            log.Printf("Hub: Не удалось отправить async сообщение - Broadcast переполнен")
+        }
     }()
 }
 

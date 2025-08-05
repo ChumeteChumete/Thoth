@@ -6,15 +6,17 @@ import (
 
     "github.com/gorilla/websocket"
     "Thoth/internal/models"
+    "Thoth/internal/storage"
     wsHub "Thoth/internal/websocket"
 )
 
 type ChatHandler struct {
     Hub *wsHub.Hub
+    Store *storage.Storage
 }
 
-func NewChatHandler(hub *wsHub.Hub) *ChatHandler {
-    return &ChatHandler{Hub: hub}
+func NewChatHandler(hub *wsHub.Hub, store *storage.Storage) *ChatHandler {
+    return &ChatHandler{Hub: hub, Store: store}
 }
 
 // ServeWS обрабатывает WebSocket подключения
@@ -32,9 +34,12 @@ func (ch *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
     // Превращаем HTTP запрос в WebSocket соединение
     upgrader := &websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool {
-        return true
-    },
+        CheckOrigin: func(r *http.Request) bool {
+            return true
+        },
+        // БУФЕРЫ ДЛЯ WebRTC
+        ReadBufferSize:  4096, 
+        WriteBufferSize: 4096,  
     }
 
     conn, err := upgrader.Upgrade(w, r, nil)
@@ -43,13 +48,16 @@ func (ch *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    log.Printf("WebSocket подключение установлено для %s в комнате %s", username, roomID)
+
     // Создаем нового клиента
     client := &wsHub.Client{
         Hub:      ch.Hub,
         Conn:     conn,
-        Send:     make(chan models.Message, 256),
+        Send:     make(chan models.Message, 1024),
         Username: username,
         RoomID:   roomID,
+        Store:    ch.Store,
     }
 
     // Регистрируем клиента в Hub
