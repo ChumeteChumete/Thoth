@@ -111,22 +111,6 @@ func (h *Hub) Run() {
             log.Printf("Hub: Получено сообщение для рассылки: тип='%s', от='%s', комната='%s'", 
                 message.Type, message.Username, message.RoomID)
                 
-<<<<<<< HEAD
-            if clients, ok := h.Clients[message.RoomID]; ok {
-                log.Printf("Hub: Найдено %d клиентов в комнате %s", len(clients), message.RoomID)
-                sentCount := 0
-                for client := range clients {
-                    log.Printf("Hub: Пытаемся отправить сообщение клиенту %s", client.Username)
-                    select {
-                    case client.Send <- message:
-                        sentCount++
-                        log.Printf("Hub: Сообщение успешно отправлено клиенту %s", client.Username)
-                    default:
-                        log.Printf("Hub: Очередь клиента %s переполнена, отключаем", client.Username)
-                        close(client.Send)
-                        delete(h.Clients[message.RoomID], client)
-                    }
-=======
             // WebRTC сообщение?
             if message.Type == models.MessageTypeWebRTCOffer || 
                message.Type == models.MessageTypeWebRTCAnswer || 
@@ -155,11 +139,7 @@ func (h *Hub) Run() {
                         log.Printf("Hub: Сообщение отправлено %d клиентам", sentCount)
                 } else {
                     log.Printf("Hub: ОШИБКА - Комната %s не найдена в h.Clients!", message.RoomID)
->>>>>>> b7106ae (added postgreSQL, updated UI)
                 }
-                log.Printf("Hub: Сообщение отправлено %d клиентам", sentCount)
-            } else {
-                log.Printf("Hub: ОШИБКА - Комната %s не найдена в h.Clients!", message.RoomID)
             }
         }
     }
@@ -286,8 +266,6 @@ func (c *Client) WritePump() {
     }
 }
 
-<<<<<<< HEAD
-=======
 func (h *Hub) FindClient(roomID, username string) *Client {
     if clients, exists := h.Clients[roomID]; exists {
         for client := range clients {
@@ -317,7 +295,6 @@ func (h *Hub) SendToUser(message models.Message) {
     }
 }
 
->>>>>>> b7106ae (added postgreSQL, updated UI)
 func (h *Hub) GetRoomUsers(roomID string) []string {
     var users []string
     if clients, ok := h.Clients[roomID]; ok {
