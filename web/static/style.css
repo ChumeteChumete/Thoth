@@ -612,3 +612,19 @@ body {
         max-width: 85%;
     }
 }
+
+.video-container.picture-in-picture {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 300px;
+    height: 200px;
+    z-index: 100;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.video-area.minimal {
+    min-height: auto;
+    height: auto;
+    max-height: 250px;
+}

@@ -9,11 +9,33 @@ class ThothChatClient {
         this.onlineUsers = new Set();
         this.broadcastingUsers = new Set(); // пользователи с включенным видео
         
-        // WebRTC конфигурация
+        // Замените в chat-client.js конфигурацию ICE серверов
         this.rtcConfig = {
             iceServers: [
+                // Google STUN серверы
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                
+                // Cloudflare STUN
+                { urls: 'stun:stun.cloudflare.com:3478' },
+                
+                // Публичные TURN серверы
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
             ]
         };
         
@@ -66,7 +88,8 @@ class ThothChatClient {
         this.username = this.usernameInput.value.trim() || 'Аноним';
         this.room = this.roomInput.value.trim() || 'general';
         
-        const wsUrl = `wss://192.168.0.101:8443/ws?username=${encodeURIComponent(this.username)}&room=${encodeURIComponent(this.room)}`;
+        // WebSocket URL - используем внешний IP
+        const wsUrl = `wss://thoth-webrtc.duckdns.org:8443/ws?username=${this.username}&roomId=${this.room}`;
         
         try {
             this.ws = new WebSocket(wsUrl);
@@ -145,7 +168,7 @@ class ThothChatClient {
         } else if (data.type === 'user_joined') {
             this.addUser(data.username);
             this.addSystemMessage(`${data.username} присоединился к чату`);
-            
+            /*
             // Если у нас есть видео, сразу инициируем звонок новому пользователю
             if (this.localStream && data.username !== this.username) {
                 setTimeout(() => {
@@ -153,7 +176,7 @@ class ThothChatClient {
                     this.startVideoCall(data.username);
                 }, 2000); // Увеличили задержку для стабильности
             }
-            
+            */
         } else if (data.type === 'user_left') {
             this.removeUser(data.username);
             this.addSystemMessage(`${data.username} покинул чат`);
@@ -474,7 +497,17 @@ class ThothChatClient {
         const controlsOverlay = document.createElement('div');
         controlsOverlay.className = 'video-controls-overlay';
         
-        // Кнопка изменения размера
+        // Кнопка Picture-in-Picture
+        const pipBtn = document.createElement('button');
+        pipBtn.className = 'video-control-btn';
+        pipBtn.innerHTML = '📱';
+        pipBtn.title = 'Picture-in-Picture';
+        pipBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.togglePictureInPicture(videoContainer);
+        });
+        
+        // Кнопка максимизации
         const resizeBtn = document.createElement('button');
         resizeBtn.className = 'video-control-btn';
         resizeBtn.innerHTML = '⛶';
@@ -484,7 +517,7 @@ class ThothChatClient {
             this.toggleVideoSize(videoContainer);
         });
         
-        // Кнопка изменения режима отображения
+        // Кнопка режима отображения
         const fitBtn = document.createElement('button');
         fitBtn.className = 'video-control-btn';
         fitBtn.innerHTML = '⚏';
@@ -494,8 +527,23 @@ class ThothChatClient {
             this.toggleVideoFit(videoContainer);
         });
         
+        // Кнопка закрытия (только для удаленных видео)
+        if (username !== this.username) {
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'video-control-btn';
+            closeBtn.innerHTML = '✕';
+            closeBtn.title = 'Закрыть видео';
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.closeRemoteVideo(username);
+            });
+            controlsOverlay.appendChild(closeBtn);
+        }
+        
+        controlsOverlay.appendChild(pipBtn);
         controlsOverlay.appendChild(resizeBtn);
         controlsOverlay.appendChild(fitBtn);
+        
         videoContainer.appendChild(controlsOverlay);
         
         // Двойной клик для максимизации
@@ -531,6 +579,39 @@ class ThothChatClient {
         } else {
             video.classList.add('contain');
             console.log('📺 Режим: показать полностью');
+        }
+    }
+
+    togglePictureInPicture(videoContainer) {
+        const isPip = videoContainer.classList.contains('picture-in-picture');
+        
+        if (isPip) {
+            videoContainer.classList.remove('picture-in-picture');
+            console.log('📺 PiP выключен');
+        } else {
+            // Убираем PiP у всех других
+            this.videoArea.querySelectorAll('.video-container').forEach(container => {
+                container.classList.remove('picture-in-picture');
+            });
+            videoContainer.classList.add('picture-in-picture');
+            console.log('📺 PiP включен');
+        }
+    }
+
+    closeRemoteVideo(username) {
+        const videoElement = document.getElementById(`video-${username}`);
+        if (videoElement) {
+            videoElement.remove();
+            console.log('🗑️ Закрыто видео для', username);
+        }
+        
+        // Закрываем соединение
+        this.closePeerConnection(username);
+        
+        // Если нет больше видео, скрываем область
+        const remainingVideos = this.videoArea.querySelectorAll('[id^="video-"]:not([id="localVideo"])');
+        if (remainingVideos.length === 0 && !this.localStream) {
+            this.videoArea.classList.remove('active');
         }
     }
     
@@ -678,16 +759,6 @@ class ThothChatClient {
             
             // Сначала добавляем треки в существующие соединения
             this.addTracksToExistingConnections();
-
-            // Затем звоним пользователям, с которыми нет соединения
-            setTimeout(() => {
-                this.onlineUsers.forEach(username => {
-                    if (username !== this.username && !this.peerConnections.has(username)) {
-                        console.log('🎥 Автоматический звонок новому пользователю:', username);
-                        this.startVideoCall(username);
-                    }
-                });
-            }, 1000); // Даем время на renegotiation
             
         } catch (error) {
             console.error('❌ Ошибка доступа к экрану/микрофону:', error);
