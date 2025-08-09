@@ -5,6 +5,7 @@ import (
     "testing"
 	"github.com/joho/godotenv"
 	"log"
+    "context"
 )
 
 func TestSaveAndGetMessage(t *testing.T) {
@@ -27,7 +28,7 @@ func TestSaveAndGetMessage(t *testing.T) {
         Content:  "Тестовое сообщение",
     }
 
-    if err := store.SaveMessage(msg); err != nil {
+    if err := store.SaveMessage(context.Background(), msg); err != nil {
         t.Fatalf("Ошибка сохранения сообщения: %v", err)
     }
 

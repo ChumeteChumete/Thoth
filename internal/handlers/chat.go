@@ -1,14 +1,15 @@
 package handlers
 
 import (
-    "log"
     "net/http"
+    "log/slog"
 
     "github.com/gorilla/websocket"
     "Thoth/internal/models"
     "Thoth/internal/storage"
     wsHub "Thoth/internal/websocket"
 )
+var chatLogger = slog.With("component", "chat")
 
 type ChatHandler struct {
     Hub *wsHub.Hub
@@ -31,12 +32,33 @@ func (ch *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
     if roomID == "" {
         roomID = "general"
     }
+    
+    chatLogger.Info("WebSocket connection attempt", 
+        "username", username, 
+        "room", roomID,
+        "origin", r.Header.Get("Origin"),
+        "remote", r.RemoteAddr)
 
     // Превращаем HTTP запрос в WebSocket соединение
     upgrader := &websocket.Upgrader{
         CheckOrigin: func(r *http.Request) bool {
-            return true
+            origin := r.Header.Get("Origin")
+            // Для разработки разрешаем localhost
+            allowedOrigins := []string{
+                "https://localhost:8443",
+                "https://thoth-webrtc.duckdns.org:8443",
+                "https://127.0.0.1:8443",
+            }
+            
+            for _, allowed := range allowedOrigins {
+                if origin == allowed {
+                    return true
+                }
+            }
+            
+            return true // Временно, для отладки
         },
+
         // БУФЕРЫ ДЛЯ WebRTC
         ReadBufferSize:  4096, 
         WriteBufferSize: 4096,  
@@ -44,11 +66,11 @@ func (ch *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
-        log.Printf("Ошибка WebSocket upgrade: %v", err)
+        chatLogger.Error("Error WebSocket upgrade", "error", err)
         return
     }
 
-    log.Printf("WebSocket подключение установлено для %s в комнате %s", username, roomID)
+    chatLogger.Info("WebSocket connection established for the client in the room", "username", username, "room", roomID)
 
     // Создаем нового клиента
     client := &wsHub.Client{

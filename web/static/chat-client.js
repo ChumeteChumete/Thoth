@@ -88,8 +88,11 @@ class ThothChatClient {
         this.username = this.usernameInput.value.trim() || 'Аноним';
         this.room = this.roomInput.value.trim() || 'general';
         
-        // WebSocket URL - используем внешний IP
-        const wsUrl = `wss://thoth-webrtc.duckdns.org:8443/ws?username=${this.username}&roomId=${this.room}`;
+        // Используем текущий хост
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${location.host}/ws?username=${encodeURIComponent(this.username)}&room=${encodeURIComponent(this.room)}`;
+
+        console.log('🔗 Подключаемся к:', wsUrl);
         
         try {
             this.ws = new WebSocket(wsUrl);
@@ -275,6 +278,14 @@ class ThothChatClient {
                 this.broadcastingUsers.delete(username);
                 this.updateUsersList();
                 this.closePeerConnection(username);
+            }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+            console.log(`ICE состояние с ${username}:`, pc.iceConnectionState);
+            if (pc.iceConnectionState === 'disconnected') {
+                // Попытаться переподключиться через 3 секунды
+                setTimeout(() => this.attemptReconnect(username), 3000);
             }
         };
         

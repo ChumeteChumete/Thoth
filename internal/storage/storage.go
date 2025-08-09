@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "github.com/lib/pq"
 	"time"
+	"context"
 )
 
 type Message struct {
@@ -25,12 +26,15 @@ func NewStorage(connStr string) (*Storage, error) {
 	return &Storage{db: db}, nil
 }
 
-func (s *Storage) SaveMessage(msg Message) error {
-	_, err := s.db.Exec(
-		"INSERT INTO messages (username, content) VALUES ($1, $2)",
-		msg.Username, msg.Content,
-	)
-	return err
+func (s *Storage) SaveMessage(ctx context.Context, msg Message) error {
+    ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+    defer cancel()
+    
+    _, err := s.db.ExecContext(ctx,
+        "INSERT INTO messages (username, content) VALUES ($1, $2)",
+        msg.Username, msg.Content,
+    )
+    return err
 }
 
 func (s *Storage) GetRecentMessages(limit int) ([]Message, error) {

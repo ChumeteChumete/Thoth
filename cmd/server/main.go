@@ -10,7 +10,7 @@ import (
     "os/signal"
     "syscall"
     "time"
-    "log"
+	"log/slog"
     "github.com/joho/godotenv"
 
     "Thoth/internal/handlers"
@@ -18,42 +18,44 @@ import (
     "Thoth/internal/storage"
 )
 
+var mainLogger = slog.With("component", "main")
+
 func main() {
-    log.SetFlags(log.LstdFlags | log.Lshortfile)
     
-    // Загружаем переменные окружения из .env
     if err := godotenv.Load(); err != nil {
-        log.Println("⚠️  Файл .env не найден, переменные окружения будут взяты из системы")
+        mainLogger.Error("File .env not found, environment variables will be taken from the system")
+		os.Exit(1)
     }
 
-    // Диагностическая информация
-    log.Println("🚀 Запуск Thoth Chat Server")
-    log.Printf("📁 Рабочая директория: %s", getCurrentDir())
+	// Для диагностики
+    mainLogger.Info("Running Thoth Chat Server")
     
     // Проверяем сертификаты
     if !checkCertificates() {
-        log.Println("⚠️  SSL сертификаты не найдены или невалидны")
+        mainLogger.Error("SSL certificates not found or invalid")
     }
 
     // Проверяем базу данных
     connStr := os.Getenv("THOTH_DB_CONN")
     if connStr == "" {
-        log.Fatal("❌ Не задана переменная окружения THOTH_DB_CONN")
+        mainLogger.Error("Environment variable THOTH_DB_CONN is not set")
+		os.Exit(1)
     }
     
     store, err := storage.NewStorage(connStr)
     if err != nil {
-        log.Fatalf("❌ Ошибка подключения к базе: %v", err)
+        mainLogger.Error("Error connecting to the database", "error", err)
+		os.Exit(1)
     }
     defer store.Close()
-    log.Println("✅ Подключение к базе данных установлено")
+    mainLogger.Info("Connection to the database has been established")
 
-    // Создаем Hub - центральный диспетчер чата
+    // Создаем хаб
     hub := websocket.NewHub()
     
-    // Запускаем Hub в отдельной горутине
+    // Запускаем хаб в отдельной горутине
     go hub.Run()
-    log.Println("✅ WebSocket Hub запущен")
+    mainLogger.Info("WebSocket Hub launched")
     
     // Создаем обработчики HTTP запросов
     chatHandler := handlers.NewChatHandler(hub, store)
@@ -75,7 +77,8 @@ func main() {
     // Настраиваем TLS
     tlsConfig, err := setupTLS()
     if err != nil {
-        log.Fatalf("❌ Ошибка настройки TLS: %v", err)
+        mainLogger.Error("TLS setup error", "error", err)
+		os.Exit(1)
     }
     srv.TLSConfig = tlsConfig
 
@@ -84,16 +87,17 @@ func main() {
 
     // Запускаем HTTP сервер
     go func() {
-        log.Println("🌐 Сервер запущен на https://localhost:8443")
-        log.Println("🌐 Внешний доступ: https://thoth-webrtc.duckdns.org:8443")
-        log.Println("📊 Health check: https://localhost:8443/health")
+        mainLogger.Info("🌐 The server is running on https://localhost:8443")
+        mainLogger.Info("🌐 External access: https://thoth-webrtc.duckdns.org:8443")
+        mainLogger.Info("📊 Health check: https://localhost:8443/health")
         
         if err := srv.ListenAndServeTLS("certs/server.crt", "certs/server.key"); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("❌ Ошибка запуска HTTPS сервера: %v", err)
+            mainLogger.Error("HTTPS server startup error", "error", err)
+			os.Exit(1)
         }
     }()
 
-    // Дополнительный HTTP сервер для редиректа (опционально)
+    // Дополнительный HTTP сервер для редиректа
     go func() {
         httpSrv := &http.Server{
             Addr: ":8080",
@@ -102,14 +106,14 @@ func main() {
                 if len(r.URL.RawQuery) > 0 {
                     target += "?" + r.URL.RawQuery
                 }
-                log.Printf("🔄 Редирект HTTP -> HTTPS: %s", target)
+                mainLogger.Info("Redirect HTTP -> HTTPS", "target", target)
                 http.Redirect(w, r, target, http.StatusPermanentRedirect)
             }),
         }
         
-        log.Println("🔄 HTTP редирект сервер запущен на :8080")
+        mainLogger.Info("HTTP redirect server running on :8080")
         if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Printf("⚠️  HTTP редирект сервер: %v", err)
+            mainLogger.Error("ERROR HTTP redirect server", "error", err)
         }
     }()
 
@@ -118,25 +122,18 @@ func main() {
     defer stop()
 
     <-ctx.Done()
-    log.Println("🛑 Получен сигнал завершения")
+    mainLogger.Info("Termination signal received")
 
     shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
 
     if err := srv.Shutdown(shutdownCtx); err != nil {
-        log.Fatalf("❌ Ошибка при завершении сервера: %v", err)
+        mainLogger.Error("Error terminating server", "error", err)
+		os.Exit(1)
     }
 
     hub.Stop()
-    log.Println("✅ Сервер остановлен")
-}
-
-func getCurrentDir() string {
-    dir, err := os.Getwd()
-    if err != nil {
-        return "unknown"
-    }
-    return dir
+    mainLogger.Info("The server has stopped")
 }
 
 func checkCertificates() bool {
@@ -145,23 +142,23 @@ func checkCertificates() bool {
     
     // Проверяем существование файлов
     if _, err := os.Stat(certFile); os.IsNotExist(err) {
-        log.Printf("❌ Сертификат не найден: %s", certFile)
+        mainLogger.Error("Certificate not found", "certificate", certFile)
         return false
     }
     
     if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-        log.Printf("❌ Ключ не найден: %s", keyFile)
+        mainLogger.Error("Key not found", "key", keyFile)
         return false
     }
     
     // Проверяем валидность сертификата
     _, err := tls.LoadX509KeyPair(certFile, keyFile)
     if err != nil {
-        log.Printf("❌ Ошибка загрузки сертификата: %v", err)
+        mainLogger.Error("Error loading certificate", "error", err)
         return false
     }
     
-    log.Println("✅ SSL сертификаты найдены и валидны")
+    mainLogger.Info("SSL certificates found and valid")
     return true
 }
 
@@ -182,7 +179,7 @@ func setupTLS() (*tls.Config, error) {
         },
     }
     
-    log.Println("✅ TLS конфигурация настроена")
+    mainLogger.Info("TLS configuration is configured")
     return config, nil
 }
 
@@ -190,26 +187,16 @@ func diagnoseNetwork() {
     // Получаем локальные IP адреса
     addrs, err := net.InterfaceAddrs()
     if err != nil {
-        log.Printf("⚠️  Ошибка получения сетевых интерфейсов: %v", err)
+        mainLogger.Error("Error getting network interfaces", "error", err)
         return
     }
     
-    log.Println("🌐 Сетевые интерфейсы:")
     for _, addr := range addrs {
         if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
             if ipnet.IP.To4() != nil {
-                log.Printf("   📍 %s", ipnet.IP)
+                mainLogger.Info("Network interfaces", "ip", ipnet.IP)
             }
         }
-    }
-    
-    // Проверяем доступность порта
-    listener, err := net.Listen("tcp", ":8443")
-    if err != nil {
-        log.Printf("❌ Порт 8443 недоступен: %v", err)
-    } else {
-        listener.Close()
-        log.Println("✅ Порт 8443 доступен")
     }
 }
 
@@ -233,30 +220,30 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
     
     w.Write([]byte(response))
     
-    log.Printf("🩺 Health check from %s", r.RemoteAddr)
+    mainLogger.Info("Health check", "remote", r.RemoteAddr)
 }
 
 // serveHome отдает главную страницу
 func serveHome(w http.ResponseWriter, r *http.Request) {
     if r.URL.Path != "/" {
-        log.Printf("❌ 404: %s", r.URL.Path)
-        http.Error(w, "Страница не найдена", http.StatusNotFound)
+        mainLogger.Error("404", "path", r.URL.Path)
+        http.Error(w, "Page not found", http.StatusNotFound)
         return
     }
     
     if r.Method != "GET" {
-        log.Printf("❌ Method not allowed: %s", r.Method)
-        http.Error(w, "Метод не разрешен", http.StatusMethodNotAllowed)
+        mainLogger.Error("Method not allowed", "method", r.Method)
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
     }
     
-    log.Printf("📄 Главная страница запрошена от %s", r.RemoteAddr)
+    mainLogger.Info("Requested home page", "remote", r.RemoteAddr)
     
     // Проверяем существование файла
     filePath := "web/static/index.html"
     if _, err := os.Stat(filePath); os.IsNotExist(err) {
-        log.Printf("❌ Файл не найден: %s", filePath)
-        http.Error(w, "Файл index.html не найден", http.StatusNotFound)
+        mainLogger.Error("File not found", "file", filePath)
+        http.Error(w, "File index.html not found", http.StatusNotFound)
         return
     }
     
@@ -267,4 +254,12 @@ func serveHome(w http.ResponseWriter, r *http.Request) {
     
     // Отдаем index.html
     http.ServeFile(w, r, filePath)
+}
+
+func init() {
+    handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+        Level:     slog.LevelInfo,
+        AddSource: true,
+    })
+    slog.SetDefault(slog.New(handler))
 }
