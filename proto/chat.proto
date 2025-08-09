@@ -1,0 +1,19 @@
+syntax = "proto3";
+package chat;
+option go_package = "proto/chatpb";
+
+message ChatMessage {
+    string username = 1;
+    string content = 2;
+    string room_id = 3;
+}
+
+message SendMessageResponse {
+    bool success = 1;
+    string message_id = 2;
+    string error_message = 3;
+}
+
+service ChatService {
+    rpc SendMessage (ChatMessage) returns (SendMessageResponse);
+}
